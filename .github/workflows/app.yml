@@ -1,9 +1,11 @@
-name: App
+name: App-Debug-Build
 
 on:
   push:
     paths-ignore:
       - '.github/ISSUE_TEMPLATE'
+  # 1. 允许手动点击按钮触发
+  workflow_dispatch: 
 
 jobs:
   build:
@@ -15,19 +17,15 @@ jobs:
         with:
           submodules: 'recursive'
           fetch-depth: 0
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
-      - name: Write key
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
-        run: |
-          echo KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }} > signing.properties
-          echo KEYSTORE_ALIAS=${{ secrets.KEYSTORE_ALIAS }} >> signing.properties
-          echo KEYSTORE_ALIAS_PASSWORD='${{ secrets.KEYSTORE_ALIAS_PASSWORD }}' >> signing.properties
-          echo KEYSTORE_FILE=../key.jks >> signing.properties
-          echo ${{ secrets.KEYSTORE }} | base64 --decode > key.jks
+
+      # 2. 删除了原有的 Write key 步骤，因为 Debug 构建不需要签名文件
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -35,20 +33,30 @@ jobs:
           build-scan-publish: true
           build-scan-terms-of-use-url: "https://gradle.com/terms-of-service"
           build-scan-terms-of-use-agree: "yes"
+
       - name: Build with Gradle
         id: buildWithGradle
         run: |
+          # 自动接受 Android SDK 协议
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+          
+          # 优化构建性能的配置
           echo 'android.sdk.channel=3' >> gradle.properties
           echo 'android.native.buildOutput=verbose' >> gradle.properties
           echo 'org.gradle.caching=true' >> gradle.properties
           echo 'org.gradle.parallel=true' >> gradle.properties
-          ./gradlew :manager:assemble
-          releaseName=`ls manager/build/outputs/apk/release/shizuku*-v*-release.apk | awk -F '(/|-release.apk)' '{print $6}'` && echo "releaseName=$releaseName" >> $GITHUB_OUTPUT
-      - name: Upload release
+          
+          # 3. 改为执行 assembleDebug，绕过签名校验
+          ./gradlew :manager:assembleDebug
+          
+          # 获取生成的 APK 文件名（针对 Shizuku 的命名规则）
+          releaseName=`ls manager/build/outputs/apk/debug/shizuku*-v*-debug.apk | head -n 1 | awk -F '/' '{print $NF}'` && echo "releaseName=$releaseName" >> $GITHUB_OUTPUT
+
+      - name: Upload Debug APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.buildWithGradle.outputs.releaseName }}
-          path: "manager/build/outputs"
+          name: ${{ steps.buildWithGradle.outputs.releaseName || 'shizuku-debug-apk' }}
+          # 修改了路径，指向 debug 目录
+          path: "manager/build/outputs/apk/debug/"
           compression-level: 9
